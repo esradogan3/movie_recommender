@@ -1,0 +1,147 @@
+---
+title: "DATA6073ACODE"
+author: "Esra Dogan,Samantha Mesa"
+date: "`r Sys.Date()`"
+output: html_document
+---
+## Approach
+What are the top three movies we would recommend to each user who hasn't rated everything?
+
+Introduction
+
+In this assignment, we will build a "movie recommender" using the Global Baseline Estimate algorithm. The data comes from a survey where several people rated a set of movies, and most of them did not rate every movie.
+
+Planned Approach
+
+First we will read the movie ratings spreadsheet into R. The data has one row per user and one column per movie, with missing values where someone did not rate a film. We will reshape it into long format so that each row is one user–movie pair, which makes the calculations easier.
+
+The idea behind the Global Baseline Estimate is simple. To recommend a movie to someone, we need to guess how much they would like the films they haven't seen yet, so that we can rank those films and pick the best ones. The algorithm makes that guess by starting from the average rating across the whole survey and then adjusting it twice: once for how generous or harsh that particular user tends to be, and once for how well-liked that particular movie is overall. A user who rates everything highly gets an upward adjustment, and a movie that everyone enjoyed gets an upward adjustment too.
+
+Anticipated Challenges
+
+Some movies were rated by only a few people, so the numbers for those films may not be reliable.
+
+We also need to be careful with the missing values. If we treat unrated movies as zeros instead of missing, the averages will come out wrong.
+
+Finally, this method is not personalized, since it never looks at what kind of movies a person enjoys. We expect the users' top three lists to look similar, and we want to discuss that in our conclusion.
+
+
+## Code Base
+```{r}
+library(tidyverse)
+
+ratings_long <- read_csv("https://raw.githubusercontent.com/esradogan3/movie_recommender/refs/heads/main/SummerMoviesRating%20.csv")
+
+names(ratings_long) <- tolower(trimws(names(ratings_long)))
+
+ratings_long <- ratings_long[ratings_long$responder != "" &
+                              !is.na(ratings_long$responder), ]
+
+responders <- sort(unique(ratings_long$responder))
+movies     <- sort(unique(ratings_long$movies))
+
+data.frame(
+  Responders        = length(responders),
+  Movies            = length(movies),
+  Ratings_collected = nrow(ratings_long),
+  Possible_ratings  = length(responders) * length(movies)
+)
+
+ratings_matrix <- matrix(
+  NA_real_,
+  nrow = length(responders),
+  ncol = length(movies),
+  dimnames = list(responders, movies)
+)
+
+for (i in seq_len(nrow(ratings_long))) {
+  ratings_matrix[ratings_long$responder[i], ratings_long$movies[i]] <-
+    ratings_long$rating[i]
+}
+
+ratings_matrix
+
+overall_mean <- mean(ratings_matrix, na.rm = TRUE)
+
+user_avg   <- rowMeans(ratings_matrix, na.rm = TRUE)
+user_bias  <- user_avg - overall_mean
+
+movie_avg  <- colMeans(ratings_matrix, na.rm = TRUE)
+movie_bias <- movie_avg - overall_mean
+
+# Baseline for every user/movie pair: mu + user_bias + movie_bias
+baseline <- outer(user_bias, movie_bias, FUN = "+") + overall_mean
+dimnames(baseline) <- dimnames(ratings_matrix)
+
+# Ratings are on a 1-5 scale, so clip estimates to that range
+baseline_clipped <- baseline
+baseline_clipped[baseline_clipped > 5] <- 5
+baseline_clipped[baseline_clipped < 1] <- 1
+
+overall_mean
+
+sort(round(user_bias, 3), decreasing = TRUE)
+
+sort(round(movie_bias, 3), decreasing = TRUE)
+
+round(baseline_clipped, 2)
+
+top_n_recommendations <- function(user, mat, baseline_matrix, n = 3) {
+  unrated <- names(which(is.na(mat[user, ])))
+  if (length(unrated) == 0) return(NULL)
+  preds <- sort(baseline_matrix[user, unrated], decreasing = TRUE)
+  head(preds, n)
+}
+
+incomplete_users <- responders[apply(is.na(ratings_matrix), 1, any)]
+complete_users   <- setdiff(responders, incomplete_users)
+
+recommendation_table <- data.frame(
+  User = character(0), Rank = integer(0),
+  Movie = character(0), Predicted = numeric(0),
+  stringsAsFactors = FALSE
+)
+
+for (u in incomplete_users) {
+  recs <- top_n_recommendations(u, ratings_matrix, baseline_clipped, n = 3)
+  for (k in seq_along(recs)) {
+    recommendation_table <- rbind(
+      recommendation_table,
+      data.frame(User = u, Rank = k, Movie = names(recs)[k],
+                 Predicted = round(unname(recs[k]), 3),
+                 stringsAsFactors = FALSE)
+    )
+  }
+}
+
+recommendation_table
+
+knitr::kable(
+  recommendation_table,
+  col.names = c("User", "Rank", "Movie", "Predicted Rating"),
+  caption = "Top 3 predicted movies for each user with unrated movies"
+)
+
+library(ggplot2)
+
+recommendation_table$Rank <- factor(
+  recommendation_table$Rank,
+  levels = c(1, 2, 3),
+  labels = c("1st pick", "2nd pick", "3rd pick")
+)
+
+ggplot(recommendation_table,
+       aes(x = User, y = Predicted, fill = Rank)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(aes(label = Movie), position = position_dodge(width = 0.8),
+            angle = 90, hjust = -0.05, size = 3) +
+  coord_cartesian(ylim = c(0, 6)) +
+  labs(title = "Top 3 Recommended Movies per User",
+       subtitle = "Global Baseline Estimate predicted rating (clipped to 1-5)",
+       x = "User", y = "Predicted Rating", fill = "Recommendation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## So to answer our questions the three movie we would recommand are Toy Story 5, Oppenheimer and Michael
